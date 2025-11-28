@@ -1,0 +1,44 @@
+on:
+    workflow_dispatch:
+  name: whatthe
+  jobs:
+    push_artifacts:
+      name: push artifacts to dev code artifacts
+      runs-on: zluri-self-hosted-iam-role
+      steps:
+        - name: Checkout
+          uses: actions/checkout@v1
+        - name: Configure AWS credentials
+          run: |
+            echo "I am in same AWS Accout"
+            AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query "Account" --output text)
+            echo "AWS_ACCOUNT_ID=${AWS_ACCOUNT_ID}" >> $GITHUB_ENV
+            echo "::add-mask::$AWS_ACCOUNT_ID"
+        - name: Authenticate to the Code Articatory
+          id: login-codeartifact
+          env:
+            AWS_ACCOUNT_ID: ${{ env.AWS_ACCOUNT_ID }}
+            AWS_REGION: ${{ secrets.AWS_REGION }}
+            CODE_ARTIFACT_DOMAIN: ${{ secrets.DEV_CODE_ARTIFACT_DOMAIN }}
+          run: |
+            CODEARTIFACT_AUTH_TOKEN=$(aws codeartifact get-authorization-token --domain ${CODE_ARTIFACT_DOMAIN} --domain-owner ${AWS_ACCOUNT_ID} --region ${AWS_REGION}  --query authorizationToken --output text)
+            echo "::add-mask::$CODEARTIFACT_AUTH_TOKEN"
+            export CODEARTIFACT_AUTH_TOKEN=$(aws codeartifact get-authorization-token --domain ${CODE_ARTIFACT_DOMAIN} --domain-owner ${AWS_ACCOUNT_ID} --region ${AWS_REGION}  --query authorizationToken --output text)
+            cat << EOF >> .npmrc
+            registry=https://${CODE_ARTIFACT_DOMAIN}-${AWS_ACCOUNT_ID}.d.codeartifact.${AWS_REGION}.amazonaws.com/npm/npm-store/
+            //dev-code-artifacts-${AWS_ACCOUNT_ID}.d.codeartifact.${AWS_REGION}.amazonaws.com/npm/npm-store/:always-auth=true
+            //dev-code-artifacts-${AWS_ACCOUNT_ID}.d.codeartifact.${AWS_REGION}.amazonaws.com/npm/npm-store/:_authToken=${CODEARTIFACT_AUTH_TOKEN}
+            always-auth=true
+            EOF
+        - name: Authenticate to ECR and build image.
+          id: push-artifacts
+          env:
+            AWS_ACCOUNT_ID: ${{ env.AWS_ACCOUNT_ID }}
+            AWS_REGION: ${{ secrets.AWS_REGION }}
+          run: |
+            AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query "Account" --output text)
+            echo "::add-mask::$AWS_ACCOUNT_ID"
+            aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
+            cat /var/run/secrets/eks.amazonaws.com/serviceaccount/token>token
+            docker build -t test --build-arg AWS_S3_BUCKET_NAME=${{secrets.AWS_S3_BUCKET_NAME}} --build-arg AWS_ROLE_ARN=${AWS_ROLE_ARN} .
+  
